@@ -1,0 +1,6 @@
+{
+  "name": "Weather Intelligence",
+  "description": "High-fidelity real-time weather tracking powered by Open-Meteo, with customized, interactive meteorological charts and Gemini-driven contextual intelligence for life, travel, garden, health, energy, and style decisions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
