@@ -23,6 +23,7 @@ import { getWeatherCondition } from "./utils/weatherUtils";
 import ForecastAndTrendsChart from "./components/ForecastAndTrendsChart";
 import HistoricalPanel from "./components/HistoricalPanel";
 import AlertCenter from "./components/AlertCenter";
+import { generateLocalIntelligence } from "./utils/localIntelligence";
 
 // Default seed location (London, UK)
 const DEFAULT_CITY: LocationResult = {
@@ -125,15 +126,40 @@ export default function App() {
     const timer = setTimeout(async () => {
       setSearchLoading(true);
       try {
-        const response = await fetch(`/api/weather/search?q=${encodeURIComponent(searchQuery)}`);
-        if (!response.ok) throw new Error("Search suggestions payload corrupt");
-        const data = await response.json();
+        let results: LocationResult[] = [];
+        let isFallback = false;
         
-        if (data.results && Array.isArray(data.results)) {
-          setSearchResults(data.results);
-        } else {
-          setSearchResults([]);
+        try {
+          const response = await fetch(`/api/weather/search?q=${encodeURIComponent(searchQuery)}`);
+          if (!response.ok) {
+            isFallback = true;
+          } else {
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("text/html")) {
+              isFallback = true;
+            } else {
+              const data = await response.json();
+              if (data && data.results && Array.isArray(data.results)) {
+                results = data.results;
+              }
+            }
+          }
+        } catch (e) {
+          isFallback = true;
         }
+
+        if (isFallback) {
+          const directUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchQuery)}&count=10&language=en`;
+          const directResponse = await fetch(directUrl);
+          if (directResponse.ok) {
+            const data = await directResponse.json();
+            if (data && data.results && Array.isArray(data.results)) {
+              results = data.results;
+            }
+          }
+        }
+
+        setSearchResults(results);
       } catch (err: any) {
         console.error("Geocoding lookup failed:", err.message);
       } finally {
@@ -157,14 +183,39 @@ export default function App() {
     updateRecentSearches(city);
 
     try {
-      // Stream parameters
-      const url = `/api/weather/forecast?lat=${city.latitude}&lon=${city.longitude}&timezone=${encodeURIComponent(city.timezone)}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load weather report (Status: ${res.status})`);
+      let payload: WeatherData | null = null;
+      let isFallback = false;
+
+      try {
+        const url = `/api/weather/forecast?lat=${city.latitude}&lon=${city.longitude}&timezone=${encodeURIComponent(city.timezone)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          isFallback = true;
+        } else {
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("text/html")) {
+            isFallback = true;
+          } else {
+            payload = await res.json();
+          }
+        }
+      } catch (e) {
+        isFallback = true;
       }
-      
-      const payload: WeatherData = await res.json();
+
+      if (isFallback || !payload) {
+        const directUrl = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(String(city.latitude))}&longitude=${encodeURIComponent(String(city.longitude))}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,showers,snowfall,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,sunrise,sunset,uv_index_max,precipitation_sum,rain_sum,showers_sum,snowfall_sum,precipitation_probability_max,wind_speed_10m_max&hourly=temperature_2m,precipitation_probability,weather_code&timezone=${encodeURIComponent(city.timezone)}`;
+        const directResponse = await fetch(directUrl);
+        if (!directResponse.ok) {
+          throw new Error(`Open-Meteo direct forecast returned status ${directResponse.status}`);
+        }
+        payload = await directResponse.json();
+      }
+
+      if (!payload) {
+        throw new Error("Unable to load weather forecast telemetry.");
+      }
+
       setWeatherData(payload);
 
       // Once weather resolves, trigger AI intelligence analysis in background/sequential flow
@@ -181,22 +232,39 @@ export default function App() {
   // 5. Fire Gemini Secure AI Analysis
   const fetchAIWeatherIntelligence = async (weather: WeatherData, city: LocationResult) => {
     try {
-      const response = await fetch("/api/weather/intelligence", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          current: weather.current,
-          daily: weather.daily,
-          city: city.name,
-          country: city.country,
-        }),
-      });
+      let advice: AIIntelligence | null = null;
+      let isFallback = false;
 
-      if (!response.ok) {
-        throw new Error(`Intelligence service failed (Status: ${response.status})`);
+      try {
+        const response = await fetch("/api/weather/intelligence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            current: weather.current,
+            daily: weather.daily,
+            city: city.name,
+            country: city.country,
+          }),
+        });
+
+        if (!response.ok) {
+          isFallback = true;
+        } else {
+          const contentType = response.headers.get("content-type") || "";
+          if (contentType.includes("text/html")) {
+            isFallback = true;
+          } else {
+            advice = await response.json();
+          }
+        }
+      } catch (e) {
+        isFallback = true;
       }
 
-      const advice: AIIntelligence = await response.json();
+      if (isFallback || !advice) {
+        advice = generateLocalIntelligence(weather, city);
+      }
+
       if (advice && advice.summary) {
         setIntelligence(advice);
       } else {

@@ -144,14 +144,36 @@ export default function HistoricalPanel({ city }: HistoricalPanelProps) {
     }
 
     try {
-      const url = `/api/weather/historical?lat=${city.latitude}&lon=${city.longitude}&start_date=${start}&end_date=${end}&timezone=${encodeURIComponent(city.timezone)}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load historical charts (Status: ${res.status})`);
+      let data: any = null;
+      let isFallback = false;
+
+      try {
+        const url = `/api/weather/historical?lat=${city.latitude}&lon=${city.longitude}&start_date=${start}&end_date=${end}&timezone=${encodeURIComponent(city.timezone)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          isFallback = true;
+        } else {
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("text/html")) {
+            isFallback = true;
+          } else {
+            data = await res.json();
+          }
+        }
+      } catch (e) {
+        isFallback = true;
       }
-      const data = await res.json();
-      
-      if (!data.daily || !data.daily.time || data.daily.time.length === 0) {
+
+      if (isFallback || !data) {
+        const directUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${encodeURIComponent(String(city.latitude))}&longitude=${encodeURIComponent(String(city.longitude))}&start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(end)}&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,wind_speed_10m_max&timezone=${encodeURIComponent(city.timezone)}`;
+        const directResponse = await fetch(directUrl);
+        if (!directResponse.ok) {
+          throw new Error(`Open-Meteo archives direct download failed (Status: ${directResponse.status})`);
+        }
+        data = await directResponse.json();
+      }
+
+      if (!data || !data.daily || !data.daily.time || data.daily.time.length === 0) {
         throw new Error("No daily archival telemetry recorded for this range.");
       }
 
